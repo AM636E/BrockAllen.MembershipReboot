@@ -19,7 +19,7 @@ namespace BrockAllen.MembershipReboot.WebHost
 
         protected override void IssueToken(ClaimsPrincipal principal, TimeSpan? tokenLifetime = null, bool? persistentCookie = null)
         {
-            if (principal == null) throw new ArgumentNullException("principal");
+            if (principal == null) throw new ArgumentNullException(nameof(principal));
 
             if (tokenLifetime == null)
             {
@@ -45,9 +45,11 @@ namespace BrockAllen.MembershipReboot.WebHost
                 throw new Exception("SessionAuthenticationModule is not configured and it needs to be.");
             }
 
-            var token = new SessionSecurityToken(principal, tokenLifetime.Value);
-            token.IsPersistent = persistentCookie.Value;
-            token.IsReferenceMode = sam.IsReferenceMode;
+            var token = new SessionSecurityToken(principal, tokenLifetime.Value)
+            {
+                IsPersistent = persistentCookie.Value,
+                IsReferenceMode = sam.IsReferenceMode
+            };
 
             sam.WriteSessionTokenToCookie(token);
 
@@ -108,10 +110,12 @@ namespace BrockAllen.MembershipReboot.WebHost
                 throw new Exception("SessionAuthenticationModule is not configured and it needs to be.");
             }
 
-            var token = new SessionSecurityToken(principal, tokenLifetime.Value);
-            token.IsPersistent = persistentCookie.Value;
-            token.IsReferenceMode = sam.IsReferenceMode;
-            
+            var token = new SessionSecurityToken(principal, tokenLifetime.Value)
+            {
+                IsPersistent = persistentCookie.Value,
+                IsReferenceMode = sam.IsReferenceMode
+            };
+
             sam.WriteSessionTokenToCookie(token);
 
             Tracing.Verbose("[SamAuthenticationService.IssueToken] cookie issued: {0}", principal.Claims.GetValue(ClaimTypes.NameIdentifier));

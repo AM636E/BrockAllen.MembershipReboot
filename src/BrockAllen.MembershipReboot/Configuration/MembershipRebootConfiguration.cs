@@ -4,12 +4,38 @@
  */
 
 using System;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace BrockAllen.MembershipReboot
 {
     public class MembershipRebootConfiguration<TAccount>
         where TAccount : UserAccount
     {
+        public bool MultiTenant { get; set; }
+        public string DefaultTenant { get; set; }
+        public bool EmailIsUnique { get; set; }
+        public bool EmailIsUsername { get; set; }
+        public bool UsernamesUniqueAcrossTenants { get; set; }
+        public bool RequireAccountVerification { get; set; }
+        public bool AllowLoginAfterAccountCreation { get; set; }
+        public int AccountLockoutFailedLoginAttempts { get; set; }
+        public TimeSpan AccountLockoutDuration { get; set; }
+        public bool AllowAccountDeletion { get; set; }
+        public int PasswordHashingIterationCount { get; set; }
+        public int PasswordResetFrequency { get; set; }
+        public TimeSpan VerificationKeyLifetime { get; set; }
+
+        private readonly AggregateValidator<TAccount> _usernameValidators = new AggregateValidator<TAccount>();
+        public IValidator<TAccount> UsernameValidator => _usernameValidators;
+
+        private readonly AggregateValidator<TAccount> _passwordValidators = new AggregateValidator<TAccount>();
+
+        public IValidator<TAccount> PasswordValidator => _passwordValidators;
+
+        private readonly AggregateValidator<TAccount> _emailValidators = new AggregateValidator<TAccount>();
+        public IValidator<TAccount> EmailValidator => _emailValidators;
+
         public MembershipRebootConfiguration()
             : this(SecuritySettings.Instance)
         {
@@ -17,8 +43,8 @@ namespace BrockAllen.MembershipReboot
 
         public MembershipRebootConfiguration(SecuritySettings securitySettings)
         {
-            if (securitySettings == null) throw new ArgumentNullException("securitySettings");
-            
+            if (securitySettings == null) throw new ArgumentNullException(nameof(securitySettings));
+
             this.MultiTenant = securitySettings.MultiTenant;
             this.DefaultTenant = securitySettings.DefaultTenant;
             this.EmailIsUnique = securitySettings.EmailIsUnique;
@@ -34,54 +60,79 @@ namespace BrockAllen.MembershipReboot
             this.VerificationKeyLifetime = securitySettings.VerificationKeyLifetime;
 
             this.Crypto = new DefaultCrypto();
-        }
 
-        public bool MultiTenant { get; set; }
-        public string DefaultTenant { get; set; }
-        public bool EmailIsUnique { get; set; }
-        public bool EmailIsUsername { get; set; }
-        public bool UsernamesUniqueAcrossTenants { get; set; }
-        public bool RequireAccountVerification { get; set; }
-        public bool AllowLoginAfterAccountCreation { get; set; }
-        public int AccountLockoutFailedLoginAttempts { get; set; }
-        public TimeSpan AccountLockoutDuration { get; set; }
-        public bool AllowAccountDeletion { get; set; }
-        public int PasswordHashingIterationCount { get; set; }
-        public int PasswordResetFrequency { get; set; }
-        public TimeSpan VerificationKeyLifetime { get; set; }
+            if (!this.EmailIsUsername)
+            {
+                _usernameValidators.Add("UsernameDoesNotContainAtSign", UserAccountValidation<TAccount>.UsernameDoesNotContainAtSign);
+                _usernameValidators.Add("UsernameCanOnlyStartOrEndWithLetterOrDigit", UserAccountValidation<TAccount>.UsernameCanOnlyStartOrEndWithLetterOrDigit);
+                _usernameValidators.Add("UsernameOnlyContainsValidCharacters", UserAccountValidation<TAccount>.UsernameOnlyContainsValidCharacters);
+                _usernameValidators.Add("UsernameOnlySingleInstanceOfSpecialCharacters", UserAccountValidation<TAccount>.UsernameOnlySingleInstanceOfSpecialCharacters);
+            }
+            _usernameValidators.Add("UsernameMustNotAlreadyExist", UserAccountValidation<TAccount>.UsernameMustNotAlreadyExist);
+
+            _emailValidators.Add("EmailIsRequiredIfRequireAccountVerificationEnabled", UserAccountValidation<TAccount>.EmailIsRequiredIfRequireAccountVerificationEnabled);
+            _emailValidators.Add("EmailIsValidFormat", UserAccountValidation<TAccount>.EmailIsValidFormat);
+            if (this.EmailIsUnique)
+            {
+                _emailValidators.Add("EmailMustNotAlreadyExist", UserAccountValidation<TAccount>.EmailMustNotAlreadyExist);
+            }
+
+            _passwordValidators.Add("PasswordMustBeDifferentThanCurrent", UserAccountValidation<TAccount>.PasswordMustBeDifferentThanCurrent);
+        }
 
         internal void Validate()
         {
-            if (this.EmailIsUnique == false)
+            if (this.EmailIsUnique) return;
+            if (this.EmailIsUsername)
             {
-                if (this.EmailIsUsername)
-                {
-                    throw new InvalidOperationException("EmailMustBeUnique is false and EmailIsUsername is true");
-                }
+                throw new InvalidOperationException("EmailMustBeUnique is false and EmailIsUsername is true");
             }
         }
 
+        public void RegisterUsernameValidator(params KeyValuePair<string, IValidator<TAccount>>[] items)
+        {
+            foreach (var item in items)
+            {
+                _usernameValidators[item.Key] = item.Value;
+            }
+        }
 
-        AggregateValidator<TAccount> usernameValidators = new AggregateValidator<TAccount>();
         public void RegisterUsernameValidator(params IValidator<TAccount>[] items)
         {
-            usernameValidators.AddRange(items);
+            RegisterUsernameValidator(items.Select(it => new KeyValuePair<string, IValidator<TAccount>>(it.GetType().Name, it)).ToArray());
         }
-        public IValidator<TAccount> UsernameValidator { get { return usernameValidators; } }
 
-        AggregateValidator<TAccount> passwordValidators = new AggregateValidator<TAccount>();
+        public void RegisterPasswordValidator(params KeyValuePair<string, IValidator<TAccount>>[] items)
+        {
+            foreach (var item in items)
+            {
+                _passwordValidators[item.Key] = item.Value;
+            }
+        }
+
         public void RegisterPasswordValidator(params IValidator<TAccount>[] items)
         {
-            passwordValidators.AddRange(items);
+            RegisterPasswordValidator(items.Select(it => new KeyValuePair<string, IValidator<TAccount>>(it.GetType().Name, it)).ToArray());
         }
-        public IValidator<TAccount> PasswordValidator { get { return passwordValidators; } }
 
-        AggregateValidator<TAccount> emailValidators = new AggregateValidator<TAccount>();
+        public void UnregisterUsernameValidator(string name)
+        {
+            if (_usernameValidators.ContainsKey(name))
+                _usernameValidators.Remove(name);
+        }
+
+        public void RegisterEmailValidator(params KeyValuePair<string, IValidator<TAccount>>[] items)
+        {
+            foreach (var item in items)
+            {
+                _emailValidators[item.Key] = item.Value;
+            }
+        }
+
         public void RegisterEmailValidator(params IValidator<TAccount>[] items)
         {
-            emailValidators.AddRange(items);
+            RegisterEmailValidator(items.Select(it => new KeyValuePair<string, IValidator<TAccount>>(it.GetType().Name, it)).ToArray());
         }
-        public IValidator<TAccount> EmailValidator { get { return emailValidators; } }
 
         EventBus eventBus = new EventBus();
         public IEventBus EventBus { get { return eventBus; } }
@@ -90,7 +141,7 @@ namespace BrockAllen.MembershipReboot
             foreach (var h in handlers) VerifyHandler(h);
             eventBus.AddRange(handlers);
         }
-        
+
         EventBus validationBus = new EventBus();
         public IEventBus ValidationBus { get { return validationBus; } }
         public void AddValidationHandler(params IEventHandler[] handlers)
@@ -100,7 +151,8 @@ namespace BrockAllen.MembershipReboot
         }
 
         CommandBus commandBus = new CommandBus();
-        public ICommandBus CommandBus { get { return commandBus; } }
+        public ICommandBus CommandBus => commandBus;
+
         public void AddCommandHandler(ICommandHandler handler)
         {
             VerifyHandler(handler);
@@ -145,18 +197,17 @@ namespace BrockAllen.MembershipReboot
                         var isSameType = targetUserAccountType == typeof(TAccount);
                         if (!isSameType)
                         {
-                            throw new ArgumentException(String.Format("Command handler: {0} must handle commands for User Account type: {1}",
-                                e.GetType().FullName,
-                                typeof(TAccount).FullName));
+                            throw new ArgumentException(
+                                $"Command handler: {e.GetType().FullName} must handle commands for User Account type: {typeof(TAccount).FullName}");
                         }
                     }
                 }
             }
         }
-        
+
         public ICrypto Crypto { get; set; }
     }
-    
+
     public class MembershipRebootConfiguration : MembershipRebootConfiguration<UserAccount>
     {
         public MembershipRebootConfiguration()

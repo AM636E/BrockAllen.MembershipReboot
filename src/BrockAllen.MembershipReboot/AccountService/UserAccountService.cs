@@ -20,9 +20,10 @@ namespace BrockAllen.MembershipReboot
         EventBusUserAccountRepository<TAccount> userRepository;
         AggregateCommandBus aggregateCommandBus;
 
-        Lazy<AggregateValidator<TAccount>> usernameValidator;
         Lazy<AggregateValidator<TAccount>> emailValidator;
         Lazy<AggregateValidator<TAccount>> passwordValidator;
+
+        public Lazy<AggregateValidator<TAccount>> UsernameValidator { get; }
 
         public UserAccountService(IUserAccountRepository<TAccount> userRepository)
             : this(new MembershipRebootConfiguration<TAccount>(), userRepository)
@@ -31,63 +32,47 @@ namespace BrockAllen.MembershipReboot
 
         public UserAccountService(MembershipRebootConfiguration<TAccount> configuration, IUserAccountRepository<TAccount> userRepository)
         {
-            if (configuration == null) throw new ArgumentNullException("configuration");
-            if (userRepository == null) throw new ArgumentNullException("userRepository");
+            if (configuration == null) throw new ArgumentNullException(nameof(configuration));
+            if (userRepository == null) throw new ArgumentNullException(nameof(userRepository));
 
             configuration.Validate();
 
             this.Configuration = configuration;
 
-            aggregateCommandBus = new AggregateCommandBus() {
+            aggregateCommandBus = new AggregateCommandBus {
                 commandBus, configuration.CommandBus
             };
 
-            var validationEventBus = new EventBus();
-            validationEventBus.Add(new UserAccountValidator<TAccount>(this));
+            var validationEventBus = new EventBus { new UserAccountValidator<TAccount>(this) };
             this.userRepository = new EventBusUserAccountRepository<TAccount>(this, userRepository,
                 new AggregateEventBus { validationEventBus, configuration.ValidationBus },
                 configuration.EventBus);
-
-            this.usernameValidator = new Lazy<AggregateValidator<TAccount>>(() =>
+            this.UsernameValidator = new Lazy<AggregateValidator<TAccount>>(() =>
             {
-                var val = new AggregateValidator<TAccount>();
-                if (!this.Configuration.EmailIsUsername)
-                {
-                    val.Add(UserAccountValidation<TAccount>.UsernameDoesNotContainAtSign);
-                    val.Add(UserAccountValidation<TAccount>.UsernameCanOnlyStartOrEndWithLetterOrDigit);
-                    val.Add(UserAccountValidation<TAccount>.UsernameOnlyContainsValidCharacters);
-                    val.Add(UserAccountValidation<TAccount>.UsernameOnlySingleInstanceOfSpecialCharacters);
-                }
-                val.Add(UserAccountValidation<TAccount>.UsernameMustNotAlreadyExist);
-                val.Add(configuration.UsernameValidator);
+                var val = new AggregateValidator<TAccount> {{"ConfigValidator", this.Configuration.UsernameValidator}};
                 return val;
             });
-
+            
             this.emailValidator = new Lazy<AggregateValidator<TAccount>>(() =>
             {
-                var val = new AggregateValidator<TAccount>();
-                val.Add(UserAccountValidation<TAccount>.EmailIsRequiredIfRequireAccountVerificationEnabled);
-                val.Add(UserAccountValidation<TAccount>.EmailIsValidFormat);
-                if (configuration.EmailIsUnique)
-                {
-                    val.Add(UserAccountValidation<TAccount>.EmailMustNotAlreadyExist);
-                }
-                val.Add(configuration.EmailValidator);
+                var val = new AggregateValidator<TAccount> {{"ConfigEmailValidator", configuration.EmailValidator}};
+
                 return val;
             });
 
             this.passwordValidator = new Lazy<AggregateValidator<TAccount>>(() =>
             {
-                var val = new AggregateValidator<TAccount>();
-                val.Add(UserAccountValidation<TAccount>.PasswordMustBeDifferentThanCurrent);
-                val.Add(configuration.PasswordValidator);
+                var val = new AggregateValidator<TAccount>
+                {
+                    {"ConfigPasswordValidator", configuration.PasswordValidator}
+                };
                 return val;
             });
         }
 
         protected void ValidateUsername(TAccount account, string value)
         {
-            var result = this.usernameValidator.Value.Validate(this, account, value);
+            var result = this.UsernameValidator.Value.Validate(this, account, value);
             if (result != null && result != ValidationResult.Success)
             {
                 Tracing.Error("ValidateUsername failed: " + result.ErrorMessage);
@@ -128,7 +113,7 @@ namespace BrockAllen.MembershipReboot
         protected void AddEvent<E>(E evt) where E : IEvent
         {
             if (evt is IAllowMultiple ||
-                !events.Any(x => x.GetType() == evt.GetType()))
+                events.All(x => x.GetType() != evt.GetType()))
             {
                 events.Add(evt);
             }
@@ -138,19 +123,14 @@ namespace BrockAllen.MembershipReboot
         {
             commandBus.Add(handler);
         }
-        CommandBus commandBus = new CommandBus();
+
+        private readonly CommandBus commandBus = new CommandBus();
         protected internal void ExecuteCommand(ICommand cmd)
         {
             aggregateCommandBus.Execute(cmd);
         }
 
-        public virtual IUserAccountQuery<TAccount> Query 
-        {
-            get
-            {
-                return this.userRepository.inner as IUserAccountQuery<TAccount>;
-            } 
-        }
+        public virtual IUserAccountQuery<TAccount> Query => this.userRepository.inner as IUserAccountQuery<TAccount>;
 
         public virtual string GetValidationMessage(string id)
         {
@@ -179,16 +159,16 @@ namespace BrockAllen.MembershipReboot
             Tracing.Information("[UserAccountService.Update] called for account: {0}", account.ID);
 
             account.LastUpdated = UtcNow;
-            
+
             UpdateInternal(account);
         }
-        
-        internal protected virtual void UpdateInternal(TAccount account)
+
+        protected internal virtual void UpdateInternal(TAccount account)
         {
             if (account == null)
             {
                 Tracing.Error("[UserAccountService.UpdateInternal] called -- failed null account");
-                throw new ArgumentNullException("account");
+                throw new ArgumentNullException(nameof(account));
             }
 
             Tracing.Information("[UserAccountService.UpdateInternal] called for account: {0}", account.ID);
@@ -242,7 +222,7 @@ namespace BrockAllen.MembershipReboot
             {
                 throw new InvalidOperationException("GetByEmail can't be used when EmailIsUnique is false");
             }
-            
+
             if (!Configuration.MultiTenant)
             {
                 Tracing.Verbose("[UserAccountService.GetByEmail] applying default tenant");
@@ -667,7 +647,7 @@ namespace BrockAllen.MembershipReboot
             CloseAccount(account);
             Update(account);
         }
-        
+
         protected virtual void CloseAccount(TAccount account)
         {
             if (account == null) throw new ArgumentNullException("account");
@@ -818,7 +798,7 @@ namespace BrockAllen.MembershipReboot
             {
                 Tracing.Error("[UserAccountService.Authenticate] failed -- empty password");
             }
-            if ((!Configuration.UsernamesUniqueAcrossTenants && String.IsNullOrWhiteSpace(tenant)) 
+            if ((!Configuration.UsernamesUniqueAcrossTenants && String.IsNullOrWhiteSpace(tenant))
                 || String.IsNullOrWhiteSpace(username) || String.IsNullOrWhiteSpace(password))
             {
                 failureCode = AuthenticationFailureCode.InvalidCredentials;
@@ -881,7 +861,7 @@ namespace BrockAllen.MembershipReboot
             {
                 throw new InvalidOperationException("AuthenticateWithEmail can't be used when EmailIsUnique is false");
             }
-            
+
             if (!Configuration.MultiTenant)
             {
                 Tracing.Verbose("[UserAccountService.AuthenticateWithEmail] applying default tenant");
@@ -934,7 +914,7 @@ namespace BrockAllen.MembershipReboot
             {
                 throw new InvalidOperationException("AuthenticateWithUsernameOrEmail can't be used when EmailIsUnique is false");
             }
-            
+
             if (!Configuration.MultiTenant)
             {
                 Tracing.Verbose("[UserAccountService.AuthenticateWithUsernameOrEmail] applying default tenant");
@@ -1430,7 +1410,7 @@ namespace BrockAllen.MembershipReboot
             {
                 throw new InvalidOperationException("ResetPassword via email can't be used when EmailIsUnique is false");
             }
-            
+
             if (!Configuration.MultiTenant)
             {
                 Tracing.Verbose("[UserAccountService.ResetPassword] applying default tenant");
@@ -1878,7 +1858,7 @@ namespace BrockAllen.MembershipReboot
 
             account.IsAccountVerified = true;
             account.Email = email;
-            
+
             ClearVerificationKey(account);
 
             this.AddEvent(new EmailVerifiedEvent<TAccount> { Account = account });
@@ -2057,7 +2037,7 @@ namespace BrockAllen.MembershipReboot
             this.AddEvent(new MobilePhoneChangedEvent<TAccount> { Account = account });
 
             Update(account);
-            
+
             Tracing.Verbose("[UserAccountService.ConfirmMobilePhoneNumberFromCode] success");
         }
 
@@ -2157,7 +2137,7 @@ namespace BrockAllen.MembershipReboot
 
             return IsVerificationKeyStale(account);
         }
-        
+
         protected virtual bool IsVerificationKeyStale(TAccount account)
         {
             if (account.VerificationKeySent == null)
@@ -2548,7 +2528,7 @@ namespace BrockAllen.MembershipReboot
                 Tracing.Error("[UserAccountService.AddClaim] failed -- null value");
                 throw new ArgumentException("value");
             }
-            
+
             var account = this.GetByID(accountID);
             if (account == null) throw new ArgumentException("Invalid AccountID", "accountID");
 
@@ -2563,7 +2543,7 @@ namespace BrockAllen.MembershipReboot
             if (!account.HasClaim(claim.Type, claim.Value))
             {
                 account.AddClaim(claim);
-                this.AddEvent(new ClaimAddedEvent<TAccount> {Account = account, Claim = claim});
+                this.AddEvent(new ClaimAddedEvent<TAccount> { Account = account, Claim = claim });
 
                 Tracing.Verbose("[UserAccountService.AddClaim] claim added");
             }
@@ -2628,7 +2608,7 @@ namespace BrockAllen.MembershipReboot
             foreach (var claim in claimsToRemove.ToArray())
             {
                 account.RemoveClaim(claim);
-                this.AddEvent(new ClaimRemovedEvent<TAccount> {Account = account, Claim = claim});
+                this.AddEvent(new ClaimRemovedEvent<TAccount> { Account = account, Claim = claim });
                 Tracing.Verbose("[UserAccountService.RemoveClaim] claim removed");
             }
         }
@@ -2981,7 +2961,7 @@ namespace BrockAllen.MembershipReboot
             ExecuteCommand(cmd);
             return cmd.MappedClaims ?? Enumerable.Empty<Claim>();
         }
-        
+
         internal protected virtual DateTime UtcNow
         {
             get

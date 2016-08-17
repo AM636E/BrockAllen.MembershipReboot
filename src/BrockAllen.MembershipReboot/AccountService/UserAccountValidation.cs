@@ -4,12 +4,13 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
 
 namespace BrockAllen.MembershipReboot
 {
-    internal class UserAccountValidation<TAccount>
+    public class UserAccountValidation<TAccount>
         where TAccount : UserAccount
     {
         public static readonly IValidator<TAccount> UsernameDoesNotContainAtSign =
@@ -28,15 +29,20 @@ namespace BrockAllen.MembershipReboot
 
         public static bool IsValidUsernameChar(char c)
         {
-            return
-                Char.IsLetterOrDigit(c) || 
-                SpecialChars.Contains(c);
+            return IsValidUsernameChar(c, SpecialChars);
         }
 
-        public static readonly IValidator<TAccount> UsernameOnlySingleInstanceOfSpecialCharacters =
+        public static bool IsValidUsernameChar(char c, IEnumerable<char> chars)
+        {
+            return
+                Char.IsLetterOrDigit(c) ||
+                chars.Contains(c);
+        }
+
+        internal static readonly IValidator<TAccount> UsernameOnlySingleInstanceOfSpecialCharacters =
                    new DelegateValidator<TAccount>((service, account, value) =>
                    {
-                       foreach(var specialChar in SpecialChars)
+                       foreach (var specialChar in SpecialChars)
                        {
                            var doubleChar = specialChar.ToString() + specialChar.ToString();
                            if (value.Contains(doubleChar))
@@ -48,20 +54,28 @@ namespace BrockAllen.MembershipReboot
 
                        return null;
                    });
-        
-        public static readonly IValidator<TAccount> UsernameOnlyContainsValidCharacters =
-            new DelegateValidator<TAccount>((service, account, value) =>
+
+        /// <summary>
+        ///  Creates validator for username to ensure that it contains only allowed characters.
+        /// </summary>
+        public static readonly Func<IEnumerable<char>, IValidator<TAccount>> UsernameOnlyContainsValidCharsValidator =
+            chars =>
             {
-                if (!value.All(x => IsValidUsernameChar(x)))
+                return new DelegateValidator<TAccount>((s, acc, val) =>
                 {
-                    Tracing.Verbose("[UserAccountValidation.UsernameOnlyContainsValidCharacters] validation failed: {0}, {1}, {2}", account.Tenant, account.Username, value);
+                    if (!val.All(x => IsValidUsernameChar(x, chars)))
+                    {
+                        Tracing.Verbose("[UserAccountValidation.UsernameOnlyContainsValidCharsValidator] validation failed: {0}, {1}, {2}", acc.Tenant, acc.Username, val);
 
-                    return new ValidationResult(service.GetValidationMessage(MembershipRebootConstants.ValidationMessages.UsernameOnlyContainsValidCharacters));
-                }
-                return null;
-            });
+                        return new ValidationResult(s.GetValidationMessage(MembershipRebootConstants.ValidationMessages.UsernameOnlyContainsValidCharacters));
+                    }
+                    return null;
+                });
+            };
 
-        public static readonly IValidator<TAccount> UsernameCanOnlyStartOrEndWithLetterOrDigit =
+        internal static readonly IValidator<TAccount> UsernameOnlyContainsValidCharacters = UsernameOnlyContainsValidCharsValidator(SpecialChars);
+
+        internal static readonly IValidator<TAccount> UsernameCanOnlyStartOrEndWithLetterOrDigit =
                    new DelegateValidator<TAccount>((service, account, value) =>
                    {
                        if (!Char.IsLetterOrDigit(value.First()) || !Char.IsLetterOrDigit(value.Last()))
@@ -72,8 +86,8 @@ namespace BrockAllen.MembershipReboot
                        }
                        return null;
                    });
-        
-        public static readonly IValidator<TAccount> UsernameMustNotAlreadyExist =
+
+        internal static readonly IValidator<TAccount> UsernameMustNotAlreadyExist =
             new DelegateValidator<TAccount>((service, account, value) =>
             {
                 if (service.UsernameExists(account.Tenant, value))
@@ -85,7 +99,7 @@ namespace BrockAllen.MembershipReboot
                 return null;
             });
 
-        public static readonly IValidator<TAccount> EmailRequired =
+        internal static readonly IValidator<TAccount> EmailRequired =
             new DelegateValidator<TAccount>((service, account, value) =>
             {
                 if (service.Configuration.RequireAccountVerification &&
@@ -98,7 +112,7 @@ namespace BrockAllen.MembershipReboot
                 return null;
             });
 
-        public static readonly IValidator<TAccount> EmailIsValidFormat =
+        internal static readonly IValidator<TAccount> EmailIsValidFormat =
             new DelegateValidator<TAccount>((service, account, value) =>
             {
                 if (!String.IsNullOrWhiteSpace(value))
@@ -114,7 +128,7 @@ namespace BrockAllen.MembershipReboot
                 return null;
             });
 
-        public static readonly IValidator<TAccount> EmailIsRequiredIfRequireAccountVerificationEnabled =
+        internal static readonly IValidator<TAccount> EmailIsRequiredIfRequireAccountVerificationEnabled =
             new DelegateValidator<TAccount>((service, account, value) =>
             {
                 if (service.Configuration.RequireAccountVerification && String.IsNullOrWhiteSpace(value))
@@ -124,7 +138,7 @@ namespace BrockAllen.MembershipReboot
                 return null;
             });
 
-        public static readonly IValidator<TAccount> EmailMustNotAlreadyExist =
+        internal static readonly IValidator<TAccount> EmailMustNotAlreadyExist =
             new DelegateValidator<TAccount>((service, account, value) =>
             {
                 if (!String.IsNullOrWhiteSpace(value) && service.EmailExistsOtherThan(account, value))
@@ -136,7 +150,7 @@ namespace BrockAllen.MembershipReboot
                 return null;
             });
 
-        public static readonly IValidator<TAccount> PasswordMustBeDifferentThanCurrent =
+        internal static readonly IValidator<TAccount> PasswordMustBeDifferentThanCurrent =
             new DelegateValidator<TAccount>((service, account, value) =>
         {
             // Use LastLogin null-check to see if it's a new account

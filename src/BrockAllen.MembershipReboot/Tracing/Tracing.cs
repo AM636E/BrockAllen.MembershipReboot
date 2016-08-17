@@ -8,7 +8,7 @@ using System.Diagnostics;
 
 namespace BrockAllen.MembershipReboot
 {
-    static public class Tracing
+    public static class Tracing
     {
         [DebuggerStepThrough]
         public static void Start(string message)
